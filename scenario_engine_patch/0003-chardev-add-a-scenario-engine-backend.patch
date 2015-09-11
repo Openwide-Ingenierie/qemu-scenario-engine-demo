@@ -1,0 +1,201 @@
+From 95f6949be61e86660c528718c874cd49bf73dbaf Mon Sep 17 00:00:00 2001
+From: Victor CLEMENT <victor.clement@openwide.fr>
+Date: Tue, 8 Sep 2015 16:48:11 +0200
+Subject: [PATCH 3/8] chardev: add a scenario engine backend
+
+This scenario backend implements the scenario interaction API for all
+character device emulators.
+It provides a callback registration function which registers a chr_write
+callback. It will call the user defined callback on incoming data.
+To write to this character device, qemu_chr_be_write can be used.
+
+Signed-off-by: Victor CLEMENT <victor.clement@openwide.fr>
+---
+ backends/Makefile.objs |   1 +
+ backends/scenario.c    | 107 +++++++++++++++++++++++++++++++++++++++++++++++++
+ include/sysemu/char.h  |  13 ++++++
+ qapi-schema.json       |   3 +-
+ qemu-char.c            |   5 +++
+ 5 files changed, 128 insertions(+), 1 deletion(-)
+ create mode 100644 backends/scenario.c
+
+diff --git a/backends/Makefile.objs b/backends/Makefile.objs
+index 31a3a89..6be07dc 100644
+--- a/backends/Makefile.objs
++++ b/backends/Makefile.objs
+@@ -1,6 +1,7 @@
+ common-obj-y += rng.o rng-egd.o
+ common-obj-$(CONFIG_POSIX) += rng-random.o
+ 
++common-obj-$(CONFIG_SCENARIO) += scenario.o
+ common-obj-y += msmouse.o testdev.o
+ common-obj-$(CONFIG_BRLAPI) += baum.o
+ baum.o-cflags := $(SDL_CFLAGS)
+diff --git a/backends/scenario.c b/backends/scenario.c
+new file mode 100644
+index 0000000..35dd9d2
+--- /dev/null
++++ b/backends/scenario.c
+@@ -0,0 +1,107 @@
++/*
++ * QEMU Scenario engine chardev backend
++ *
++ * Copyright (c) 2015 Open Wide Ingénierie
++ *
++ * Author: Victor Clément
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++#include <stdlib.h>
++#include "qemu-common.h"
++#include "qmp-commands.h"
++#include "sysemu/char.h"
++
++static int scenario_chr_write(struct CharDriverState *s,
++        const uint8_t *buf,
++        int len)
++{
++    static bool notified;
++    if (!notified) {
++        printf("Write to scenario chardev %s with no custom callback\n",
++                s->label);
++        notified = true;
++    }
++    return len;
++}
++
++
++static bool scenario_create_chardev(const char *name)
++{
++    ChardevBackend *backend = g_new0(ChardevBackend, 1);
++    backend->kind = CHARDEV_BACKEND_KIND_SCENARIO;
++    if (qmp_chardev_add(name, backend, NULL)) {
++        printf("scenario: successfull creation of scenario chardev: %s\n",
++                name);
++        return true;
++    } else {
++        printf("scenario: error creating scenario chardev: %s\n", name);
++        return false;
++    }
++    qapi_free_ChardevBackend(backend);
++}
++
++void scenario_register_chardev_cb(const char *name, scenario_chardev_cb_t *cb,
++        bool create)
++{
++    CharDriverState *chr;
++    chr = qemu_chr_find(name);
++    if (chr) {
++        chr->chr_write = cb;
++    } else {
++        if (create) {
++            printf("scenario: WARNING: chardev \"%s\" not found, creating it\n",
++                    name);
++            if (scenario_create_chardev(name)) {
++                chr = qemu_chr_find(name);
++                chr->chr_write = cb;
++                printf("scenario: INFO: chardev \"%s\" created\n", name);
++            } else {
++                printf("scenario: ERROR: chardev \"%s\" cannot be created\n",
++                        name);
++            }
++        } else {
++            printf("scenario: WARNING: chardev \"%s\" not found\n", name);
++        }
++    }
++}
++
++static void scenario_chr_close(struct CharDriverState *chr)
++{
++    g_free(chr);
++}
++
++CharDriverState *qemu_chr_open_scenario(void)
++{
++    CharDriverState *chr;
++
++    chr = qemu_chr_alloc();
++    chr->chr_write = scenario_chr_write;
++    chr->chr_close = scenario_chr_close;
++    chr->explicit_be_open = true;
++
++    return chr;
++}
++
++static void register_types(void)
++{
++    register_char_driver("scenario", CHARDEV_BACKEND_KIND_SCENARIO, NULL);
++}
++
++type_init(register_types);
+diff --git a/include/sysemu/char.h b/include/sysemu/char.h
+index 832b7fe..94bebf2 100644
+--- a/include/sysemu/char.h
++++ b/include/sysemu/char.h
+@@ -368,4 +368,17 @@ typedef CharDriverState *(VcHandler)(ChardevVC *vc);
+ 
+ void register_vc_handler(VcHandler *handler);
+ CharDriverState *vc_init(ChardevVC *vc);
++
++/* scenario.c */
++#ifdef CONFIG_SCENARIO
++CharDriverState *qemu_chr_open_scenario(void);
++
++typedef int scenario_chardev_cb_t(struct CharDriverState *s,
++        const uint8_t *buf,
++        int len);
++void scenario_register_chardev_cb(const char *name,
++        scenario_chardev_cb_t *cb,
++        bool create);
++#endif
++
+ #endif
+diff --git a/qapi-schema.json b/qapi-schema.json
+index 4342a08..2aed9da 100644
+--- a/qapi-schema.json
++++ b/qapi-schema.json
+@@ -3042,7 +3042,8 @@
+                                        'vc'     : 'ChardevVC',
+                                        'ringbuf': 'ChardevRingbuf',
+                                        # next one is just for compatibility
+-                                       'memory' : 'ChardevRingbuf' } }
++                                       'memory' : 'ChardevRingbuf',
++                                       'scenario': 'ChardevDummy' } }
+ 
+ ##
+ # @ChardevReturn:
+diff --git a/qemu-char.c b/qemu-char.c
+index d956f8d..717fafd 100644
+--- a/qemu-char.c
++++ b/qemu-char.c
+@@ -4295,6 +4295,11 @@ ChardevReturn *qmp_chardev_add(const char *id, ChardevBackend *backend,
+     case CHARDEV_BACKEND_KIND_MEMORY:
+         chr = qemu_chr_open_ringbuf(backend->ringbuf, errp);
+         break;
++#ifdef CONFIG_SCENARIO
++    case CHARDEV_BACKEND_KIND_SCENARIO:
++        chr = qemu_chr_open_scenario();
++        break;
++#endif
+     default:
+         error_setg(errp, "unknown chardev backend (%d)", backend->kind);
+         break;
+-- 
+2.5.1
+

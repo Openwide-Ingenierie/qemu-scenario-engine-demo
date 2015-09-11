@@ -1,0 +1,21 @@
+; Qemu scenario engine demonstration events file.
+; Written by Victor Clément <victor.clement@openwide.fr>
+;
+#10000000
+%check
+#100000000
+#110000020
+%check
+#200000000
+#210000030
+%check
+#300000000
+#310000040
+%check
+#400000000
+#410000050
+%check
+#500000000
+#510000060
+%check
+

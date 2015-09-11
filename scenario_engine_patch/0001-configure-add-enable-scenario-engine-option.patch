@@ -1,0 +1,56 @@
+From aa8b1076e93c0ac38c097532d6e543eb5578c9af Mon Sep 17 00:00:00 2001
+From: Victor CLEMENT <victor.clement@openwide.fr>
+Date: Tue, 8 Sep 2015 16:46:07 +0200
+Subject: [PATCH 1/8] configure: add --enable-scenario-engine option
+
+Add an option to ./configure script to enable the scenario engine.
+It defines the CONFIG_SCENARIO constant.
+
+Signed-off-by: Victor CLEMENT <victor.clement@openwide.fr>
+---
+ configure | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/configure b/configure
+index cd219d8..466a71f 100755
+--- a/configure
++++ b/configure
+@@ -300,6 +300,7 @@ pkgversion=""
+ pie=""
+ zero_malloc=""
+ qom_cast_debug="yes"
++scenario="no"
+ trace_backends="nop"
+ trace_file="trace"
+ spice=""
+@@ -788,6 +789,8 @@ for opt do
+   ;;
+   --target-list=*) target_list="$optarg"
+   ;;
++  --enable-scenario-engine) scenario="yes"
++  ;;
+   --enable-trace-backends=*) trace_backends="$optarg"
+   ;;
+   # XXX: backwards compatibility
+@@ -4552,6 +4555,7 @@ echo "uuid support      $uuid"
+ echo "libcap-ng support $cap_ng"
+ echo "vhost-net support $vhost_net"
+ echo "vhost-scsi support $vhost_scsi"
++echo "Scenario engine   $scenario"
+ echo "Trace backends    $trace_backends"
+ if test "$trace_backend" = "simple"; then
+ echo "Trace output file $trace_file-<pid>"
+@@ -5084,6 +5088,10 @@ if test "$tpm" = "yes"; then
+   fi
+ fi
+ 
++if test "$scenario" = "yes" ; then
++  echo "CONFIG_SCENARIO=y" >> $config_host_mak
++fi
++
+ echo "TRACE_BACKENDS=$trace_backends" >> $config_host_mak
+ if have_backend "nop"; then
+   echo "CONFIG_TRACE_NOP=y" >> $config_host_mak
+-- 
+2.5.1
+

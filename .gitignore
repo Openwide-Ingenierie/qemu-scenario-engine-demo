@@ -1,0 +1,12 @@
+# Qemu source
+qemu/
+
+# Trace and VCD files
+traces/
+trace-*
+*.vcd
+
+# Guest software object files and unnecessary binaries
+*.o
+*.elf
+

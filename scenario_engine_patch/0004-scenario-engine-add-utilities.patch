@@ -1,0 +1,139 @@
+From 607c4a5d87a92ed6188557fd047003527587a331 Mon Sep 17 00:00:00 2001
+From: Victor CLEMENT <victor.clement@openwide.fr>
+Date: Tue, 8 Sep 2015 16:48:58 +0200
+Subject: [PATCH 4/8] scenario-engine: add utilities
+
+This scenario utilities file currently implements one function.
+This function is the event callback registration function which walks
+through all guest devices to find those of a given type then registers
+their event callback.
+
+Signed-off-by: Victor CLEMENT <victor.clement@openwide.fr>
+---
+ Makefile.objs            |  6 +++++
+ include/scenario/utils.h | 23 +++++++++++++++++
+ scenario/utils.c         | 65 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 94 insertions(+)
+ create mode 100644 include/scenario/utils.h
+ create mode 100644 scenario/utils.c
+
+diff --git a/Makefile.objs b/Makefile.objs
+index f094eff..3ebb694 100644
+--- a/Makefile.objs
++++ b/Makefile.objs
+@@ -105,6 +105,12 @@ util-obj-y +=  trace/
+ target-obj-y += trace/
+ 
+ ######################################################################
++
++######################################################################
++# scenario
++util-obj-$(CONFIG_SCENARIO) +=  scenario/utils.o
++
++######################################################################
+ # guest agent
+ 
+ # FIXME: a few definitions from qapi-types.o/qapi-visit.o are needed
+diff --git a/include/scenario/utils.h b/include/scenario/utils.h
+new file mode 100644
+index 0000000..56066e9
+--- /dev/null
++++ b/include/scenario/utils.h
+@@ -0,0 +1,23 @@
++#ifndef SCENARIO_UTILS_H
++#define SCENARIO_UTILS_H
++
++/*
++ * Every emulator callback register should implement this prototype in order to
++ * allow the recursive callback registration function to call it
++ */
++typedef void scenario_emulator_cb_register_t \
++            (void *opaque, unsigned int id, void *emulator_cb);
++
++/*
++ * Registers emulator callbacks of every devices of specified type
++ *
++ * type: a string representing the target device emulator type (ex. "pl061")
++ * cb_register: the device emulator scenario API callback register function
++ * emulator_cb: the user implemented callback to register (its prototype should
++ * be predefined in the device emulator API)
++ */
++unsigned int scenario_register_emulator_cb(const char *type,
++        scenario_emulator_cb_register_t *cb_register,
++        void *emulator_cb);
++
++#endif
+diff --git a/scenario/utils.c b/scenario/utils.c
+new file mode 100644
+index 0000000..e64699a
+--- /dev/null
++++ b/scenario/utils.c
+@@ -0,0 +1,65 @@
++#include "scenario/utils.h"
++#include "hw/qdev-core.h"
++#include "stdio.h"
++
++// #define DEBUG_SCENARIO_UTILS
++
++#ifdef DEBUG_SCENARIO_UTILS
++#define DPRINTF(fmt, ...) \
++    do { printf("scenario: " fmt, ## __VA_ARGS__); } while (0)
++#else
++#define DPRINTF(fmt, ...) do {} while (0)
++#endif
++
++/*
++ * Recursively walk through all devices from system bus to find devices
++ * corresponding to name parameter then registers their scenario callbacks
++ *
++ * bus: current bus
++ * name: target device type name
++ * n: current scenario device identifier
++ * cb_register: emulator callaback register function
++ * emulator_cb: emulator callback to set
++ */
++static DeviceState *register_simu_callback_recursive(BusState *bus,
++        const char *name,
++        unsigned int *n,
++        scenario_emulator_cb_register_t *cb_register,
++        void *emulator_cb)
++{
++    BusChild *kid;
++    DeviceState *ret;
++    BusState *child;
++
++    QTAILQ_FOREACH(kid, &bus->children, sibling) {
++        DeviceState *dev = kid->child;
++
++        if (strcmp(object_get_typename(OBJECT(dev)), name) == 0) {
++            (*n)++;
++            DPRINTF("Device %s #%d found\n", name, *n);
++            cb_register(dev, *n, emulator_cb);
++        }
++
++        QLIST_FOREACH(child, &dev->child_bus, sibling) {
++            ret = register_simu_callback_recursive(
++                    child, name, n, cb_register, emulator_cb);
++            if (ret) {
++                return ret;
++            }
++        }
++    }
++    return NULL;
++}
++
++unsigned int scenario_register_emulator_cb(const char *type,
++        scenario_emulator_cb_register_t *cb_register,
++        void *emulator_cb)
++{
++    unsigned int n = 0;
++    register_simu_callback_recursive(sysbus_get_default(), type, &n,
++            cb_register, emulator_cb);
++    if (!n) {
++        printf("scenario: WARNING: no \"%s\" devices found\n", type);
++    }
++    return n;
++}
+-- 
+2.5.1
+

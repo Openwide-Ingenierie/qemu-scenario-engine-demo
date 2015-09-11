@@ -1,0 +1,117 @@
+From 5d211af9aa286fafb86b80fa5d25cf61b835fa27 Mon Sep 17 00:00:00 2001
+From: Victor CLEMENT <victor.clement@openwide.fr>
+Date: Tue, 8 Sep 2015 16:46:40 +0200
+Subject: [PATCH 2/8] gpio-pl061: add a scenario engine interaction API
+
+Add a scenario API to interact with guest GPIOs.
+It implements read and write functions in order to check or modify the
+guest GPIO data register from the scenario test file.
+It also provides an event notification callback to the scenario engine
+by calling a user-defined handler after each "pl061_update".
+
+Signed-off-by: Victor CLEMENT <victor.clement@openwide.fr>
+---
+ hw/gpio/pl061.c              | 38 ++++++++++++++++++++++++++++++++++++++
+ include/hw/gpio/pl061_simu.h | 20 ++++++++++++++++++++
+ 2 files changed, 58 insertions(+)
+ create mode 100644 include/hw/gpio/pl061_simu.h
+
+diff --git a/hw/gpio/pl061.c b/hw/gpio/pl061.c
+index 4ba730b..b20885a 100644
+--- a/hw/gpio/pl061.c
++++ b/hw/gpio/pl061.c
+@@ -9,6 +9,7 @@
+  */
+ 
+ #include "hw/sysbus.h"
++#include "hw/gpio/pl061_simu.h"
+ 
+ //#define DEBUG_PL061 1
+ 
+@@ -60,6 +61,10 @@ typedef struct PL061State {
+     qemu_irq irq;
+     qemu_irq out[8];
+     const unsigned char *id;
++#ifdef CONFIG_SCENARIO
++    simu_event_cb_t *simu_cb;
++    unsigned int simu_id;
++#endif
+ } PL061State;
+ 
+ static const VMStateDescription vmstate_pl061 = {
+@@ -145,6 +150,13 @@ static void pl061_update(PL061State *s)
+ 
+     DPRINTF("istate = %02X\n", s->istate);
+ 
++#ifdef CONFIG_SCENARIO
++    if (s->simu_cb) {
++        s->simu_cb(s, TYPE_PL061, s->simu_id);
++    }
++#endif
++
++
+     qemu_set_irq(s->irq, (s->istate & s->im) != 0);
+ }
+ 
+@@ -205,6 +217,32 @@ static uint64_t pl061_read(void *opaque, hwaddr offset,
+     }
+ }
+ 
++#ifdef CONFIG_SCENARIO
++void pl061_simu_write(void *opaque, uint8_t mask, uint8_t value)
++{
++    PL061State *s = (PL061State *)opaque;
++
++    s->data = (s->data & ~mask) | (value & mask);
++    pl061_update(s);
++}
++uint8_t pl061_simu_read(void *opaque, uint8_t mask)
++{
++    PL061State *s = (PL061State *)opaque;
++
++    return s->data & mask;
++}
++void pl061_simu_register_cb(void *opaque, unsigned int simu_id, void *opaque_cb)
++{
++    PL061State *s = PL061(opaque);
++    simu_event_cb_t *cb = (simu_event_cb_t *) opaque_cb;
++
++    if (!(s->simu_cb)) {
++        s->simu_cb = cb;
++        s->simu_id = simu_id;
++    }
++}
++#endif
++
+ static void pl061_write(void *opaque, hwaddr offset,
+                         uint64_t value, unsigned size)
+ {
+diff --git a/include/hw/gpio/pl061_simu.h b/include/hw/gpio/pl061_simu.h
+new file mode 100644
+index 0000000..66e20bf
+--- /dev/null
++++ b/include/hw/gpio/pl061_simu.h
+@@ -0,0 +1,20 @@
++#ifdef CONFIG_SCENARIO
++
++#ifndef PL061_SIMU_H
++#define PL061_SIMU_H
++
++typedef void simu_event_cb_t(void *opaque,
++        const char *type,
++        unsigned int simu_id);
++
++void pl061_simu_write(void *opaque, uint8_t mask, uint8_t value);
++
++uint8_t pl061_simu_read(void *opaque, uint8_t mask);
++
++void pl061_simu_register_cb(void *opaque,
++        unsigned int simu_id,
++        void *opaque_cb);
++
++#endif
++
++#endif
+-- 
+2.5.1
+

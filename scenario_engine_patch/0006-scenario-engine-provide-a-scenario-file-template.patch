@@ -1,0 +1,217 @@
+From 7b58ecfa1ce83a1aae59b933bbfc7c8431df3d63 Mon Sep 17 00:00:00 2001
+From: Victor CLEMENT <victor.clement@openwide.fr>
+Date: Wed, 9 Sep 2015 10:58:02 +0200
+Subject: [PATCH 6/8] scenario engine: provide a scenario file template
+
+This template implements the mandatory functions of the main scenario
+source file and provides an example use case.
+
+Signed-off-by: Victor CLEMENT <victor.clement@openwide.fr>
+---
+ Makefile.objs               |   1 +
+ include/scenario/scenario.h |   5 ++
+ scenario/scenario.c         | 168 ++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 174 insertions(+)
+ create mode 100644 include/scenario/scenario.h
+ create mode 100644 scenario/scenario.c
+
+diff --git a/Makefile.objs b/Makefile.objs
+index 112794d..aa38f42 100644
+--- a/Makefile.objs
++++ b/Makefile.objs
+@@ -108,6 +108,7 @@ target-obj-y += trace/
+ 
+ ######################################################################
+ # scenario
++util-obj-$(CONFIG_SCENARIO) +=  scenario/scenario.o
+ util-obj-$(CONFIG_SCENARIO) +=  scenario/scheduler.o
+ util-obj-$(CONFIG_SCENARIO) +=  scenario/utils.o
+ 
+diff --git a/include/scenario/scenario.h b/include/scenario/scenario.h
+new file mode 100644
+index 0000000..50ffc6d
+--- /dev/null
++++ b/include/scenario/scenario.h
+@@ -0,0 +1,5 @@
++#include "scenario/scheduler.h"
++#include "hw/gpio/pl061_simu.h"
++
++void init_scenario_engine(const char *filename);
++
+diff --git a/scenario/scenario.c b/scenario/scenario.c
+new file mode 100644
+index 0000000..a237ecb
+--- /dev/null
++++ b/scenario/scenario.c
+@@ -0,0 +1,168 @@
++/*
++ * This is the scenario example file
++ *
++ * This example writes on a gpio pin for each event in the simulation file
++ *
++ * The simulation file should contain timestamps and a (unique) optional
++ * parameter for each timestamp.
++ * A timestamp line begins with '#' and a parameter line begins with '%', the
++ * whole line after '%' will be passed to the callback.
++ * Timestamps unit is nanosecond after sched_start
++ *
++ * ex.:
++ * #10000
++ * %parameter for timestamp 10000
++ * %this parameter line will be ignored
++ * #20000
++ * #30000
++ * ...
++ */
++
++#include "scenario/scenario.h"
++#include "scenario/utils.h"
++#include "sysemu/char.h"
++#include "trace.h"
++
++// #define DEBUG_SCENARIO
++
++#ifdef DEBUG_SCENARIO
++#define DPRINTF(fmt, ...) \
++    do { printf("scenario: " fmt, ## __VA_ARGS__); } while (0)
++#else
++#define DPRINTF(fmt, ...) do {} while (0)
++#endif
++
++static const char *simu_file;
++
++/*
++ * This callback will be called for each event in the simulation file if the
++ * the scheduler is used
++ *
++ * opaque: the opaque pointer passed to sched_start
++ * ts: the value of the timestamp which triggered this callback
++ * param: the parameter associated whith this timestamp
++ */
++static void scenario_scheduler_cb(void *opaque, uint64_t ts, char *param)
++{
++    static uint8_t old_value = 0xFF;
++    uint8_t value;
++
++    DPRINTF("Scheduler callback\n");
++    /*
++     * Checking the parameter
++     * "" -> send a signal on the GPIO2 pin
++     * "check" -> check the value of the GPIO1 pin
++     */
++    if (!strcmp(param, "check")) {
++        value = pl061_simu_read(opaque, 01);
++        if (old_value == 0xFF) {
++            old_value = value;
++        } else {
++            if (((old_value^value) & 01) == 01) {
++                printf("Toogle okay @%lu\n", ts);
++            } else {
++                printf("Toogle error @%lu\n", ts);
++            }
++            old_value = old_value^01;
++        }
++    } else {
++        /*
++         * Send a signal to the GPIO2 pin
++         */
++        pl061_simu_write(opaque, 02, 02);
++        pl061_simu_write(opaque, 02, 00);
++    }
++
++    return;
++}
++
++/*
++ * The virtual device callback
++ * This function will be called on each event in the tested device emulator
++ *
++ * Its prototype have to be the same as the one defined in the scenario header
++ * of your emulator
++ * e.x: for the pl061, the header is located in include/hw/gpio/pl061_simu.h
++ *      Here, there is a typedef which defines the callback prototype you would
++ *      have to follow
++ *
++ * See scenario_register_emulator_cb documentation for more details
++ */
++static void scenario_device_cb(void *opaque,
++        const char *type,
++        unsigned int simu_id)
++{
++    DPRINTF("Device event callabck: (%s #%d)\n", type, simu_id);
++    /*
++     * Tracing events from here
++     */
++    trace_gpio_write(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL),
++            0, pl061_simu_read(opaque, 0xFF));
++    /*
++     * Then try to start the scheduler at the first emulator event
++     *
++     * This call has no effect if the scheduler is already started (returns 2)
++     */
++    if (scenario_scheduler_start(scenario_scheduler_cb, opaque, simu_file) < 1)
++    {
++        printf("Warning: scenario scheduler did not start\n");
++    }
++}
++
++/*
++ * Function to send characters one by one to a character device
++ */
++static int send_chars(struct CharDriverState *chr, const char* buffer, int len)
++{
++    int i;
++    for (i = 0 ; i < len ; i++) {
++        qemu_chr_be_write(chr, (uint8_t *)(buffer+i), 1);
++    }
++    return len;
++}
++
++/*
++ * The character device emulator callback.
++ * It is called everytime data is written in the associated chardev frontend
++ * (ex. serial port)
++ *
++ * Its prototype is defined in include/sysemu/char.h (at the end)
++ *
++ * This callback have to be registered with the scenario_register_chardev_cb
++ * function
++ */
++static int char_simu_handler(struct CharDriverState *chr,
++        const uint8_t *buf,
++        int len)
++{
++    DPRINTF("Char custom handler called\n");
++    send_chars(chr, "Hi!\r\n", 5);
++    return len;
++}
++
++/*
++ * This is the entry point.
++ * This initialisation function is called when qemu starts, after devices init
++ *
++ * filename: the file name of the simulation file given in qemu invocation
++ */
++void init_scenario_engine(const char *filename)
++{
++    printf("Init simulation\n");
++    simu_file = filename;
++    /*
++     * Register device event callback
++     *
++     * e.x. pl061 event callback is registered to the function
++     * scenario_device_cb here
++     */
++    scenario_register_emulator_cb("pl061", pl061_simu_register_cb,
++            scenario_device_cb);
++    /*
++     * Register chardev event callback
++     *
++     * Here the event callback of the chardev identified by "scen0"
++     * is registered to char_simu_handler function
++     */
++    scenario_register_chardev_cb("scen0", char_simu_handler, true);
++}
+-- 
+2.5.1
+
