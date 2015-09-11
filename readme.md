@@ -8,6 +8,9 @@ stimulating inputs and reading outputs from outside of the virtual machine.
 It also provides an utility to schedule precise time based events to run
 through a "test scenario".
 
+A complete documentation of the scenario engine is available
+[here](doc/scenario_engine_how-to.pdf).
+
 ## The demonstration
 This demonstration runs a bare metal ARM guest software on Qemu 2.4.0 patched
 with the scenario engine.
